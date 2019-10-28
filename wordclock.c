@@ -65,32 +65,20 @@ const int pinData = 14; // A0 (used as digital pin)
 const int pinLoad = 15; // A1 (used as digital pin)
 const int pinClock = 16; // A2 (used as digital pin)
 
-// Led strips
-#define NUM_LEDS = 196;
-#define NUM_COLS = 14;
-
 // Other pins (buzzer and light sensor)
 const int pinBuzzer = 2;
 const int pinLDR = 3; // A3 (used as analog pin)
 
-// Constants
-const int noBoards = 4; // number of chained LED drivers
+// Led strips
+#define NUM_LEDS = 196;
+#define NUM_COLS = 14;
 
-// Settings (will be fetched from EEPROM)
-int brightness; // Between 0 and 15
-
-// The led controllers (MAX7219)
 CRGB leds[NUM_LEDS];
-
-LedControl lc = LedControl(pinData, pinClock, pinLoad, noBoards);
+boolean ledsBuffer[NUM_LEDS];
+int brightness; // Between 0 and 255
 
 // The real time clock chip (DS3231)
 Chronodot RTC;
-
-// LED grid 
-const int bs = 8;
-const int bss = 3;
-const int boards[2][2] = { {2, 1}, {3, 0} };
 
 // Tasks
 const int wait = 10;
@@ -105,40 +93,23 @@ Task tasks[noTasks];
 // Serial menu options
 boolean mustReadBrightness = false;
 
-// Buffer
-boolean prevframe[16][16];
-
 // Words
-
 // Format: { line index, start position index, length }
 
 const int w_it[3] =        { 0,  0,  2 };
 const int w_is[3] =        { 0,  3,  2 };
-const int w_half[3] =      { 7,  9,  4 }; 
-const int w_to[3] =        { 8,  8, 2 };
-const int w_past[3] =      { 8,  10,  4 };
-const int w_oclock[3] =    { 13, 8, 6 };
-// const int w_in[3] =        { 12, 0,  2 };
-// const int w_the[3] =       { 12, 3,  3 };
-// const int w_afternoon[3] = { 12, 7,  9 };
-const int w_noon[3] =      { 10, 5, 4 }; // part of "afternoon"
-const int w_midnight[3] =  { 13,  0,  8 };
-// const int w_morning[3] =   { 13, 0,  7 };
-// const int w_at[3] =        { 13, 8,  2 };
-// const int w_night[3] =     { 13, 11, 5 };
-// const int w_evening[3] =   { 14, 0,  7 };
-// const int w_and[3] =       { 14, 8,  3 };
-// const int w_cold[3] =      { 14, 12, 4 };
-// const int w_cool[3] =      { 15, 0,  4 };
-// const int w_warm[3] =      { 15, 6,  4 };
-// const int w_hot[3] =       { 15, 12, 3 };
-// const int w_el[3] =        { 9,  2,  2 };
+const int w_half[3] =      { 7,  9,  4 };
+const int w_to[3] =        { 8,  8,  2 };
+const int w_past[3] =      { 8,  10, 4 };
+const int w_oclock[3] =    { 13, 8,  6 };
+const int w_noon[3] =      { 10, 5,  4 };
+const int w_midnight[3] =  { 13, 0,  8 };
 
 const int w_minutes[20][3] = {
-  { 1,  0, 3 }, // one
+  { 1,  0,  3 }, // one
   { 1,  4,  3 }, // two
   { 1,  8,  5 }, // three
-  { 2,  1, 4 }, // four
+  { 2,  1,  4 }, // four
   { 2, 10,  4 }, // five
   { 3,  0,  3 }, // six
   { 4,  0,  5 }, // seven
@@ -146,7 +117,7 @@ const int w_minutes[20][3] = {
   { 7,  1,  4 }, // nine
   { 4, 10,  3 }, // ten
   { 3,  8,  6 }, // eleven
-  { 5,  0, 6 }, // twelve
+  { 5,  0,  6 }, // twelve
   { 5,  6,  8 }, // thirteen
   { 2,  1,  8 }, // fourteen
   { 8,  0,  7 }, // quarter
@@ -168,7 +139,7 @@ const int w_hours[12][3] = {
   { 10, 9,  5 }, // eight
   { 12, 2,  4 }, // nine
   { 11,10,  3 }, // ten
-  { 12, 8,  4 }, // "eleven"
+  { 12, 8,  4 }, // eleven
 };
 
 // Touch
@@ -185,25 +156,18 @@ void setup() {
   // Read settings from EEPROM
   Serial.println("[INFO] 1. Read settings");
   brightness = EEPROM.read(0);
+  // FastLed.setBrightness(brightness);
   
   // Initiate the LED drivers
   FastLED.addLeds<WS2812, pinData, GRB>(leds, NUM_LEDS);
-  
-//  Serial.println("[INFO] 2. LED drivers");
-//  for(int i = 0; i < noBoards; ++i) {
-//    lc.shutdown(i, false);
-//    lc.clearDisplay(i);
-//  }
-//  setBrightness(brightness);
 
   // Initiate the Real Time Clock
   Serial.println("[INFO] 3. Real time clock");
   Wire.begin();
   RTC.begin();
-  //if (! RTC.isrunning()) {
-  //  Serial.println("[WARNING] RTC is NOT running!");
-  //  RTC.adjust(DateTime(__DATE__, __TIME__));
-  //}
+  if (! RTC.isrunning()) {
+   Serial.println("[WARNING] RTC is NOT running!");
+  }
   
   // Initiate the capacitive touch inputs
   Serial.println("[INFO] 4. Capacitive touch");
@@ -221,13 +185,8 @@ void setup() {
   loadTasks();
   
   // Debug info
-  Serial.println("[INFO] Wordclock done booting. Hellooooo!");
+  Serial.println("[INFO] Wordclock done booting. Hello World!");
   printMenu();
-  
-}
-
-int conversion(int row, int col) {
-  return row * NUM_COLS + col;
 }
 
 void loadTasks() {
@@ -263,7 +222,7 @@ void loop() {
 
 void serialMenu() {
   if (Serial.available() > 0) {
-    if(mustReadBrightness) {
+    if (mustReadBrightness) {
       int val = Serial.parseInt();
       if(val < 0 || val > 15) {
         Serial.println("[ERROR] Brightness must be between 0 and 15");
@@ -299,120 +258,66 @@ void showTime() {
   
   // Get the time
   DateTime now = RTC.now();  
-  int h = now.hour();
-  int h2 = h;
-  int m = now.minute();
-  int t = now.tempC();
+  int hour = now.hour();
+  int hourToDisplay = hour;
+  int minute = now.minute();
+  // int t = now.tempC();
   
   // DEBUG
-  /*Serial.print("[DEBUG] ");
-  Serial.print(h, DEC);
+  Serial.print("[DEBUG] ");
+  Serial.print(hour, DEC);
   Serial.print(':');
-  Serial.println(m, DEC);*/
+  Serial.println(minute, DEC);
   
-  // The frame
-  boolean frame[16][16];
-  for(int r = 0; r < 16; r++) {
-    for(int c = 0; c < 16; c++) {
-      frame[r][c] = false;
-    }
-  }
- 
   // Show "IT IS"
-  addWordToFrame(w_it, frame);
-  addWordToFrame(w_is, frame);
+  displayWord(w_it);
+  displayWord(w_is);
   
   // Minutes
-  if (m == 0) {
-    
-    if (h == 0) {
-      addWordToFrame(w_midnight, frame);
-    } else if (h == 12) {
-      addWordToFrame(w_noon, frame);
-    } else {
-      addWordToFrame(w_oclock, frame);
+  if (minute == 0) {
+    if (hour != 0 && hour != 12) {
+      displayWord(w_oclock);
     }
-
-  } else {
-  
-    if (m <= 20) {
-      addWordToFrame(w_minutes[m - 1], frame);
-    } else if (m < 30) {
-      addWordToFrame(w_minutes[19], frame); // twenty
-      addWordToFrame(w_minutes[m - 21], frame);
-    } else if (m == 30) {
-      addWordToFrame(w_half, frame);
-    } else if (m < 40) {
-      addWordToFrame(w_minutes[19], frame); // twenty
-      addWordToFrame(w_minutes[60 - m - 21], frame);
+  }
+  else {
+    if (minute <= 20) {
+      displayWord(w_minutes[minute - 1]);
+    } else if (minute < 30) {
+      displayWord(w_minutes[19]); // twenty
+      displayWord(w_minutes[minute - 21]);
+    } else if (minute == 30) {
+      displayWord(w_half);
+    } else if (minute < 40) {
+      displayWord(w_minutes[19]); // twenty
+      displayWord(w_minutes[60 - minute - 21]);
     } else {
-      addWordToFrame(w_minutes[60 - m - 1], frame);
+      displayWord(w_minutes[60 - minute - 1]);
     }
  
-    if(m <= 30) {
-      addWordToFrame(w_past, frame);
+    if (minute <= 30) {
+      displayWord(w_past);
     } else {
-      addWordToFrame(w_to, frame);
-      ++h2;
+      displayWord(w_to);
+      hourToDisplay++;
     }
     
   } 
   
-  if(!(m ==0 && (h == 0 || h == 12))) {
-  
-    // Hours
-    if(h2 == 0) {
-      addWordToFrame(w_hours[11], frame);
-    } else if (h2 <= 12) {
-      addWordToFrame(w_hours[h2 - 1], frame);
-    } else {
-      addWordToFrame(w_hours[h2 - 13], frame);
-    }
-    if(h2 == 11 || h2 == 23) {
-      addWordToFrame(w_el, frame);
-    }
-  
-    // Time of day
-    if(h < 6) {
-      addWordToFrame(w_at, frame);
-      addWordToFrame(w_night, frame);
-    } else if(h < 12) {
-      addWordToFrame(w_in, frame);
-      addWordToFrame(w_the, frame);
-      addWordToFrame(w_morning, frame);
-    } else if(h < 18) {
-      addWordToFrame(w_in, frame);
-      addWordToFrame(w_the, frame);
-      addWordToFrame(w_afternoon, frame);
-    } else {
-      addWordToFrame(w_at, frame);
-      addWordToFrame(w_night, frame);
-    }
-    
-  }
-  
-  // Temperature
-  addWordToFrame(w_and, frame);
-  if(t <= 16) {
-    addWordToFrame(w_cold, frame);
-  } else if (t <= 20) {
-    addWordToFrame(w_cool, frame);
-  } else if (t <= 30) {
-    addWordToFrame(w_warm, frame);
+  if (hour == 0) {
+    displayWord(w_midnight);
+  } else if (hour == 12) {
+    displayWord(w_noon);
   } else {
-    addWordToFrame(w_hot, frame);
+    // Hours
+    if (hourToDisplay < 12) {
+      displayWord(w_hours[hourToDisplay - 1]);
+    } else {
+      displayWord(w_hours[hourToDisplay - 13]);
+    }
   }
 
   // Update display
-  FastLED.show();
-  
-  // Copy current frame to buffer
-  for(int r = 0; r < 16; r++) {
-    for(int c = 0; c < 16; c++) {
-      prevframe[r][c] = frame[r][c];
-    }
-  }
-  
+  updateDisplayAndClearBuffer();
 }
 
 void readTouch() {
@@ -438,30 +343,35 @@ boolean debounce(boolean value, boolean* store) {
   return value;
 }
 
-void setAllLeds(boolean on) {
-  for(int i = 0; i < noBoards; ++i) {
-    for(int r = 0; r < 8; ++r) {
-      lc.setRow(i, r, B11111111);
+void displayWord(const int word[3]){
+  int row = word[0];
+  int col = word[1];
+  int length = word[3];
+
+  for (int i = 0; i < length; i++) {
+    int ledNum = convertFrom2DTo1D(row, col + i);
+    ledsBuffer[ledNum] = true;
+  }
+}
+
+int convertFrom2DTo1D(int row, int col) {
+  return row * NUM_COLS + col;
+}
+
+void updateDisplayAndClearBuffer(int brightness) {
+  for (int i = 0, i < NUM_LEDS, i++) {
+    if (ledsBuffer[i] == true) {
+      leds[i] = CRGB::White;
+    } else {
+      leds[i] = CRGB::Black;
     }
-  }
-}
 
-void setLed(int row, int col, boolean on, int brightness) {
-  // Set the led
-  int led_num = conversion(row, col);
-  leds[led_num] = CRGB(brightness, brightness, brightness);
-}
-
-void addWordToFrame(const int theword[3], boolean frame[16][16]){
-  for(int i = 0; i < theword[2]; ++i) {
-    frame[theword[0]][theword[1] + i] = true;
+    // reset buffer
+    ledBuffer[i] = false;
   }
-}
 
-void setBrightness(int value) {
-  for(int i = 0; i < noBoards; ++i) {
-    lc.setIntensity(i, value);
-  }
+  FastLED.setBrightness(brightness);
+  FastLED.show();
 }
 
 void printMenu() {
