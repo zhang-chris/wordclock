@@ -48,18 +48,34 @@
 #include <Wire.h>
 #include <EEPROM.h>
 
+#include <SoftwareSerial.h>
+SoftwareSerial s(3,1);
+
+
+// Pins to capacitive touch chips (touch and presence for each of the Azoteq IQS127D chips in the four corners)
+const int pinTRB = 9;   // Touch Right Bottom
+const int pinTRT = 3;   // Touch Right Top
+const int pinTLT = 4;   // Touch Left Top
+const int pinTLB = 10;  // Touch Left Bottom
+// The presence pins are connected in hardware, but not used in this firmware.
+// Leaving the pin numbers in as comments for future reference.
+//const int pinPRB = 5; // Presence Right Bottom
+//const int pinPRT = 8; // Presence Right Top
+//const int pinPLT = 7; // Presence Left Bottom
+//const int pinPLB = 6; // Presence Left Top
+
 // Pins to led drivers
 const int pinData = 14; // A0 (used as digital pin)
+const int pinLoad = 15; // A1 (used as digital pin)
 const int pinClock = 16; // A2 (used as digital pin)
 
-// Other pins (light sensor)
+// Other pins (buzzer and light sensor)
+const int pinBuzzer = 2;
 const int pinLDR = 3; // A3 (used as analog pin)
 
 // Led strips
-#define NUM_COLS = 11;
-#define NUM_ROWS = 11;
-#define NUM_MINUTES = 4; // LEDs for fine minute granularity
-#define NUM_LEDS = (NUM_COLS * NUM_ROWS) + NUM_MINUTES;
+#define NUM_LEDS = 196;
+#define NUM_COLS = 14;
 
 CRGB leds[NUM_LEDS];
 boolean ledsBuffer[NUM_LEDS];
@@ -70,7 +86,7 @@ Chronodot RTC;
 
 // Tasks
 const int wait = 10;
-const int noTasks = 2;
+const int noTasks = 3;
 typedef struct Tasks {
    long unsigned int previous;
    int interval;
@@ -84,41 +100,57 @@ boolean mustReadBrightness = false;
 // Words
 // Format: { line index, start position index, length }
 
-const int w_it[3] =        { 0,  0,  strlen("it") };
-const int w_is[3] =        { 0,  3,  strlen("is") };
-const int w_five[3] =      { 2,  7,  strlen("five") };
-const int w_ten[3] =       { 3,  5,  strlen("ten") };
-const int w_quarter[3] =   { 1,  2,  strlen("quarter") };
-const int w_twenty[3] =    { 2,  0,  strlen("twenty") };
-const int w_half[3] =      { 3,  0,  strlen("half") };
-const int w_to[3] =        { 3,  9,  strlen("to") };
-const int w_past[3] =      { 4,  0,  strlen("past") };
-const int w_oclock[3] =    { 9,  5,  strlen("oclock") };
+const int w_it[3] =        { 0,  0,  2 };
+const int w_is[3] =        { 0,  3,  2 };
+const int w_half[3] =      { 7,  9,  4 };
+const int w_to[3] =        { 8,  8,  2 };
+const int w_past[3] =      { 8,  10, 4 };
+const int w_oclock[3] =    { 13, 8,  6 };
+const int w_noon[3] =      { 10, 5,  4 };
+const int w_midnight[3] =  { 13, 0,  8 };
 
-const int NUM_HOURS = 12
-const int w_hours[NUM_HOURS + 1][3] = {
-  { -1,  -1,  -1 }, // filler element so hour matches index position
-  { 5,  0,  strlen("one") },
-  { 6,  8,  strlen("two") },
-  { 5,  6,  strlen("three") },
-  { 6,  0,  strlen("four") },
-  { 6,  4,  strlen("five") },
-  { 5,  3,  strlen("six") },
-  { 8,  0,  strlen("seven") },
-  { 7,  0,  strlen("eight") },
-  { 4,  7,  strlen("nine") },
-  { 9,  0,  strlen("ten") },
-  { 7,  5,  strlen("eleven") },
-  { 8,  5,  strlen("twelve") }
+const int w_minutes[20][3] = {
+  { 1,  0,  3 }, // one
+  { 1,  4,  3 }, // two
+  { 1,  8,  5 }, // three
+  { 2,  1,  4 }, // four
+  { 2, 10,  4 }, // five
+  { 3,  0,  3 }, // six
+  { 4,  0,  5 }, // seven
+  { 6,  2,  5 }, // eight
+  { 7,  1,  4 }, // nine
+  { 4, 10,  3 }, // ten
+  { 3,  8,  6 }, // eleven
+  { 5,  0,  6 }, // twelve
+  { 5,  6,  8 }, // thirteen
+  { 2,  1,  8 }, // fourteen
+  { 8,  0,  7 }, // quarter
+  { 3,  0,  7 }, // sixteen
+  { 4,  0,  9 }, // seventeen
+  { 6,  2,  8 }, // eighteen
+  { 7,  1,  8 }, // nineteen
+  { 0,  6,  6 }  // twenty
 };
 
-const int w_minutes[NUM_MINUTES + 1][3] = {
-  { -1,  -1,  -1 }, // filler element so minute matches index position
-  { 10,  0,  1 },
-  { 10,  1,  1 },
-  { 10,  2,  1 },
-  { 10,  3,  1 }
+const int w_hours[12][3] = {
+  { 9,  0,  3 }, // one
+  { 9,  3,  3 }, // two
+  { 10, 0,  5 }, // three
+  { 9,  6,  4 }, // four
+  { 9, 10,  4 }, // five
+  { 11, 0,  3 }, // six
+  { 11, 4,  5 }, // seven
+  { 10, 9,  5 }, // eight
+  { 12, 2,  4 }, // nine
+  { 11,10,  3 }, // ten
+  { 12, 8,  4 }, // eleven
 };
+
+// Touch
+boolean tlt;
+boolean trt;
+boolean tlb;
+boolean trb;
 
 void setup() {
   // Debug info
@@ -137,10 +169,21 @@ void setup() {
   Serial.println("[INFO] 3. Real time clock");
   Wire.begin();
   RTC.begin();
-  if (!RTC.isrunning()) {
+  if (! RTC.isrunning()) {
     Serial.println("[WARNING] RTC is NOT running!");
     RTC.adjust(DateTime(__DATE__, __TIME__));
   }
+  
+  // Initiate the capacitive touch inputs
+  Serial.println("[INFO] 4. Capacitive touch");
+  pinMode(pinTRB, INPUT);
+  pinMode(pinTRT, INPUT);
+  pinMode(pinTLT, INPUT);
+  pinMode(pinTLB, INPUT);
+  //pinMode(pinPRB, INPUT);
+  //pinMode(pinPRT, INPUT);
+  //pinMode(pinPLT, INPUT);
+  //pinMode(pinPLB, INPUT);
   
   // Tasks
   Serial.println("[INFO] 5. Tasks");
@@ -162,6 +205,12 @@ void loadTasks() {
   tasks[1].previous = 0;
   tasks[1].interval = 1000;
   tasks[1].function = showTime;
+
+  // Read the touch inputs
+  tasks[2].previous = 0;
+  tasks[2].interval = 100;
+  tasks[2].function = readTouch;
+  
 }
 
 void loop() {
@@ -230,42 +279,24 @@ void showTime() {
   
   // Minutes
   if (minute == 0) {
-    displayWord(w_oclock);
+    if (hour != 0 && hour != 12) {
+      displayWord(w_oclock);
+    }
   }
   else {
-  	int floorMinute = (minute / 5) * 5
-
-  	switch (floorMinute) {
-  		case 0:
-  			break;
-		case 5:
-  			displayWord(w_five);
-  		case 10:
-  			displayWord(w_ten);
-		case 15:
-  			displayWord(w_quarter);
-  		case 20:
-  			displayWord(w_twenty);
-		case 25:
-  			displayWord(w_twenty);
-  			displayWord(w_five);
-  		case 30:
-  			displayWord(w_half);
-		case 35:
-  			displayWord(w_twenty);
-  			displayWord(w_five);
-  		case 40:
-  			displayWord(w_twenty]);
-		case 45:
-  			displayWord(w_quarter);
-  		case 50:
-  			displayWord(w_ten);
-		case 55:
-  			displayWord(w_five);
-  		default:
-  			Serial.print("Invalid floorMinute: ");
-        	Serial.println(floorMinute, DEC);
-  	}
+    if (minute <= 20) {
+      displayWord(w_minutes[minute - 1]);
+    } else if (minute < 30) {
+      displayWord(w_minutes[19]); // twenty
+      displayWord(w_minutes[minute - 21]);
+    } else if (minute == 30) {
+      displayWord(w_half);
+    } else if (minute < 40) {
+      displayWord(w_minutes[19]); // twenty
+      displayWord(w_minutes[60 - minute - 21]);
+    } else {
+      displayWord(w_minutes[60 - minute - 1]);
+    }
  
     if (minute <= 30) {
       displayWord(w_past);
@@ -273,20 +304,47 @@ void showTime() {
       displayWord(w_to);
       hourToDisplay++;
     }
+    
   } 
   
-  // Hours
-  if (hourToDisplay < 12) {
-    displayWord(w_hours[hourToDisplay]);
+  if (hour == 0) {
+    displayWord(w_midnight);
+  } else if (hour == 12) {
+    displayWord(w_noon);
   } else {
-    displayWord(w_hours[hourToDisplay - 12]);
+    // Hours
+    if (hourToDisplay < 12) {
+      displayWord(w_hours[hourToDisplay - 1]);
+    } else {
+      displayWord(w_hours[hourToDisplay - 13]);
+    }
   }
-
-  // Fine minute granularity
-  displayWord(w_minutes[minute % 5]);
 
   // Update display
   updateDisplayAndClearBuffer();
+}
+
+void readTouch() {
+  boolean lt = debounce(digitalRead(pinTLT) == LOW, &tlt);
+  boolean rt = debounce(digitalRead(pinTRT) == LOW, &trt);
+  boolean lb = debounce(digitalRead(pinTLB) == LOW, &tlb);
+  boolean rb = debounce(digitalRead(pinTRB) == LOW, &trb);
+  if(lt || rt || lb || rb) {
+    tone(pinBuzzer, 500, 100);
+  }
+}
+
+boolean debounce(boolean value, boolean* store) {
+  if(value) {
+    if(*store) {
+      value = false;
+    } else {
+      *store = true;
+    }
+  } else {
+    *store = false;
+  }
+  return value;
 }
 
 void displayWord(const int word[3]){
