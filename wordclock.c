@@ -3,10 +3,11 @@
 // November 2013 - August 2014
 // by Wouter Devinck
 
+// out of date
 // Dependencies:
 //  * Arduino libraries                - http://arduino.cc/
-//  * Chronodot library (for DS3231)   - https://github.com/Stephanie-Maks/Arduino-Chronodot
-//  * LedControl library (for MAX7219) - http://playground.arduino.cc/Main/LedControl
+//  * RTC library (for DS3231)         -
+//  * FastLED library                  - 
 
 /* Hardware block diagram:
 
@@ -44,12 +45,11 @@
 
 // Includes
 #include <FastLED.h>
-#include "Chronodot.h"  // DS3231  - Real time clock    - https://github.com/Stephanie-Maks/Arduino-Chronodot
-#include <Wire.h>
-#include <EEPROM.h>
+//#include <Wire.h>
+#include <RTClib.h>
 
 // Pins to led drivers
-const int pinData = 14; // A0 (used as digital pin)
+const int pinLED = 14; // A0 (used as digital pin)
 const int pinClock = 16; // A2 (used as digital pin)
 
 // Other pins (light sensor)
@@ -57,16 +57,15 @@ const int pinLDR = 3; // A3 (used as analog pin)
 
 // Led strips
 #define NUM_COLS = 11;
-#define NUM_ROWS = 11;
+#define NUM_ROWS = 10;
 #define NUM_MINUTES = 4; // LEDs for fine minute granularity
 #define NUM_LEDS = (NUM_COLS * NUM_ROWS) + NUM_MINUTES;
 
 CRGB leds[NUM_LEDS];
 boolean ledsBuffer[NUM_LEDS];
-int brightness; // Between 0 and 255
 
 // The real time clock chip (DS3231)
-Chronodot RTC;
+RTC_DS3231 RTC;
 
 // Tasks
 const int wait = 10;
@@ -79,7 +78,8 @@ typedef struct Tasks {
 Task tasks[noTasks];
 
 // Serial menu options
-boolean mustReadBrightness = false;
+boolean readOverrideBrightness = false;
+int overrideBrightness = -1;
 
 // Words
 // Format: { line index, start position index, length }
@@ -87,12 +87,12 @@ boolean mustReadBrightness = false;
 const int w_it[3] =        { 0,  0,  strlen("it") };
 const int w_is[3] =        { 0,  3,  strlen("is") };
 const int w_five[3] =      { 2,  7,  strlen("five") };
-const int w_ten[3] =       { 3,  5,  strlen("ten") };
-const int w_quarter[3] =   { 1,  2,  strlen("quarter") };
+const int w_ten[3] =       { 3,  0,  strlen("ten") };
+const int w_quarter[3] =   { 1,  3,  strlen("quarter") };
 const int w_twenty[3] =    { 2,  0,  strlen("twenty") };
-const int w_half[3] =      { 3,  0,  strlen("half") };
-const int w_to[3] =        { 3,  9,  strlen("to") };
-const int w_past[3] =      { 4,  0,  strlen("past") };
+const int w_half[3] =      { 3,  4,  strlen("half") };
+const int w_to[3] =        { 3,  8,  strlen("to") };
+const int w_past[3] =      { 4,  1,  strlen("past") };
 const int w_oclock[3] =    { 9,  5,  strlen("oclock") };
 
 const int NUM_HOURS = 12
@@ -120,37 +120,6 @@ const int w_minutes[NUM_MINUTES + 1][3] = {
   { 10,  3,  1 }
 };
 
-void setup() {
-  // Debug info
-  Serial.begin(9600);
-  Serial.println("[INFO] Wordclock is booting...");
-  
-  // Read settings from EEPROM
-  Serial.println("[INFO] 1. Read settings");
-  brightness = EEPROM.read(0);
-  // FastLed.setBrightness(brightness);
-  
-  // Initiate the LED drivers
-  FastLED.addLeds<WS2812, pinData, GRB>(leds, NUM_LEDS);
-
-  // Initiate the Real Time Clock
-  Serial.println("[INFO] 3. Real time clock");
-  Wire.begin();
-  RTC.begin();
-  if (!RTC.isrunning()) {
-    Serial.println("[WARNING] RTC is NOT running!");
-    RTC.adjust(DateTime(__DATE__, __TIME__));
-  }
-  
-  // Tasks
-  Serial.println("[INFO] 5. Tasks");
-  loadTasks();
-  
-  // Debug info
-  Serial.println("[INFO] Wordclock done booting. Hello World!");
-  printMenu();
-}
-
 void loadTasks() {
   
   // Listen for input on the serial interface
@@ -164,43 +133,37 @@ void loadTasks() {
   tasks[1].function = showTime;
 }
 
-void loop() {
-  unsigned long time = millis();
-  for(int i = 0; i < noTasks; i++) {
-    Task task = tasks[i];
-    if (time - task.previous > task.interval) {
-      tasks[i].previous = time;
-      task.function();
-    }
-  }  
-  delay(wait);
-}
-
+// TO DO: this is only for manual brightness control. delete if not needed
 void serialMenu() {
   if (Serial.available() > 0) {
-    if (mustReadBrightness) {
+
+    if (readOverrideBrightness) {
       int val = Serial.parseInt();
-      if(val < 0 || val > 15) {
-        Serial.println("[ERROR] Brightness must be between 0 and 15");
+      if (val < 0 || val > 255) {
+        Serial.println("[ERROR] Brightness must be between 0 and 255");
       } else {
         Serial.print("Brightness set to ");
         Serial.println(val, DEC);
-        setBrightness(val);
-        brightness = val;
-        EEPROM.write(0, val);
+        overrideBrightness = val;
       }
-      mustReadBrightness = false;
+      readOverrideBrightness = false;
       printMenu();
     } else {
-      int in = Serial.read();
-      if (in == 49) {
+      int in = Serial.read(); // TODO: can we just use #parseInt here?
+      if (in == 49) { // ascii 1 = byte 49
         Serial.println("You entered [1]");
-        Serial.println("  Enter brightness (0-15)");
-        mustReadBrightness = true;
+        Serial.println("  Enter brightness (0-255):");
+        readOverrideBrightness = true;
       } else if (in == 50) {
         Serial.println("You entered [2]");
         Serial.print("  Brightness: ");
         Serial.println(brightness, DEC);
+        printMenu();
+      } else if (in == 51) {
+        Serial.println("You entered [3]");
+        Serial.println("  Beginning simulation");
+        
+        simulateClock();
         printMenu();
       } else {
         Serial.println("[ERROR] Whut?");
@@ -210,10 +173,19 @@ void serialMenu() {
   }
 }
 
-void showTime() {
+// TODO: sync RTC with wifi every X minutes
+DateTime getTime() {
   
+  return RTC.now();
+}
+
+// TODO: does overloaded function work with task implementation
+void showTime() {
+  showTime(getTime());
+}
+
+void showTime(DateTime now) {
   // Get the time
-  DateTime now = RTC.now();  
   int hour = now.hour();
   int hourToDisplay = hour;
   int minute = now.minute();
@@ -224,7 +196,7 @@ void showTime() {
   Serial.print(':');
   Serial.println(minute, DEC);
   
-  // Show "IT IS"
+  // "IT IS"
   displayWord(w_it);
   displayWord(w_is);
   
@@ -255,7 +227,7 @@ void showTime() {
   			displayWord(w_twenty);
   			displayWord(w_five);
   		case 40:
-  			displayWord(w_twenty]);
+  			displayWord(w_twenty);
 		case 45:
   			displayWord(w_quarter);
   		case 50:
@@ -283,7 +255,10 @@ void showTime() {
   }
 
   // Fine minute granularity
-  displayWord(w_minutes[minute % 5]);
+  int floorMinute = minute % 5;
+  if (floorMinute > 0) {
+    displayWord(w_minutes[floorMinute]);
+  }
 
   // Update display
   updateDisplayAndClearBuffer();
@@ -304,7 +279,7 @@ int convertFrom2DTo1D(int row, int col) {
   return row * NUM_COLS + col;
 }
 
-void updateDisplayAndClearBuffer(int brightness) {
+void updateDisplayAndClearBuffer() {
   for (int i = 0, i < NUM_LEDS, i++) {
     if (ledsBuffer[i] == true) {
       leds[i] = CRGB::White;
@@ -316,8 +291,50 @@ void updateDisplayAndClearBuffer(int brightness) {
     ledBuffer[i] = false;
   }
 
-  FastLED.setBrightness(brightness);
+  setBrightness();
   FastLED.show();
+}
+
+void setBrightness() {
+  int lightValue = analogRead(pinLDR);
+  Serial.print("LDR value is: ");
+  Serial.println(lightValue);
+
+  int brightness = lightValueToBrightness(lightValue);
+  Serial.print("Calculated brightness value is: ");
+  Serial.println(brightness);
+  
+  if (overrideBrightness >= 0 && overrideBrightness <= 255)
+  {
+    brightness = overrideBrightness;
+    Serial.print("Overriding brightness with: ");
+    Serial.println(brightness);
+  }
+  
+  FastLED.setBrightness(brightness);
+}
+
+// TODO: empirical testing required to determine proper brightness function
+int lightValueToBrightness(int lightValue) {
+  int brightness = lightValue;
+  return 0;
+}
+
+// iterate through all possible times
+// total duration = 144s with 200ms delay
+void simulateClock() {
+  DateTime simulatedTime = getTime();
+  uint32_t simulatedUnixTime = time.unixtime();
+
+  for (int i = 0; i < (12 * 60); i++)
+  {
+    simulatedTime = DateTime(simulatedUnixTime);
+    showTime(simulatedTime);
+
+    // 60*12/5 = 144 steps. 1s per step = .2s delay
+    simulatedUnixTime += 60; // increment 1 minute
+    delay(200);
+  }
 }
 
 void printMenu() {
@@ -326,5 +343,45 @@ void printMenu() {
   Serial.println("----");
   Serial.println("  1. Set brightness");
   Serial.println("  2. Read brightness");
+  Serial.println("  3. Simulate for testing");
   Serial.println("");
+}
+
+void setup() {
+  
+  Serial.begin(9600);
+  Serial.println("[INFO] Wordclock is booting...");
+  
+  // Initiate the LED drivers
+  FastLED.addLeds<WS2812, pinLED, GRB>(leds, NUM_LEDS);
+
+  // Initiate the Real Time Clock
+  Serial.println("[INFO] 2. Real time clock");
+  //Wire.begin();
+  
+  if (!RTC.begin()) {
+    Serial.println("[ERROR] Couldn't find RTC!");
+  }
+  if (RTC.lostPower()) {
+    RTC.adjust(DateTime(F(__DATE__), F(__TIME__)));
+  }
+  
+  // Tasks
+  Serial.println("[INFO] 3. Tasks");
+  loadTasks();
+  
+  Serial.println("[INFO] 4. Wordclock done booting. Hello World!");
+  printMenu();
+}
+
+void loop() {
+  unsigned long time = millis();
+  for (int i = 0; i < noTasks; i++) {
+    Task task = tasks[i];
+    if (time - task.previous > task.interval) {
+      tasks[i].previous = time;
+      task.function();
+    }
+  }  
+  delay(wait);
 }
