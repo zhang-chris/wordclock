@@ -1,53 +1,21 @@
 // Wordclock firmware
-// ==================
-// November 2013 - August 2014
-// by Wouter Devinck
-
-// out of date
-// Dependencies:
-//  * Arduino libraries                - http://arduino.cc/
-//  * RTC library (for DS3231)         -
-//  * FastLED library                  - 
 
 /* Hardware block diagram:
 
-              +-----------------+                            
-              | Real time clock |                            
-              | Maxim DS3231    |                            
-              +--------+--------+                            
-                       |I2C                                  
-         +-------------+-------------+                       
-         |                           |   +------------------+
-         |                           +---+ 8x8 LED matrix 1 |
-+---+    |                           |   | Maxim MAX7219    |
-|LDR+----+                           |   +---------+--------+
-+---+    |      Microcontroller      |             |         
-         |      Atmel ATMEGA328      |   +---------+--------+
-+------+ |      (with Arduino        |   | 8x8 LED matrix 2 |
-|Buzzer+-+       bootloader)         |   | Maxim MAX7219    |
-+------+ |                           |   +---------+--------+
-         |                           |             |         
-         |                           |   +---------+--------+
-         +-++----++---------++----++-+   | 8x8 LED matrix 3 |
-           ||    ||         ||    ||     | Maxim MAX7219    |
-    +------++-+  ||  +------++-+  ||     +---------+--------+
-    | Azoteq  |  ||  | Azoteq  |  ||               |         
-    | IQS127D |  ||  | IQS127D |  ||     +---------+--------+
-    +---------+  ||  +---------+  ||     | 8x8 LED matrix 4 |
-                 ||               ||     | Maxim MAX7219    |
-          +------++-+      +------++-+   +------------------+
-          | Azoteq  |      | Azoteq  |                       
-          | IQS127D |      | IQS127D |                       
-          +---------+      +---------+                       
+
 
 (created using http://asciiflow.com/) */
 
+#define ESP32_RTOS // for ota capability
 
 // Includes
 #include <FastLED.h>
-//#include <Wire.h>
-#include <RTClib.h>
+#include <WiFi.h>
+#include <ezTime.h>
+#include <credentials.h>
+#include "OTA.h"
 
+// TODO: correct pin numbers
 // Pins to led drivers
 const int pinLED = 14; // A0 (used as digital pin)
 const int pinClock = 16; // A2 (used as digital pin)
@@ -55,17 +23,18 @@ const int pinClock = 16; // A2 (used as digital pin)
 // Other pins (light sensor)
 const int pinLDR = 3; // A3 (used as analog pin)
 
+// NTP clock server
+Timezone localTimezone;
+const char* localTimezoneLocation = "America/Los_Angeles";
+
 // Led strips
-#define NUM_COLS = 11;
-#define NUM_ROWS = 10;
-#define NUM_MINUTES = 4; // LEDs for fine minute granularity
-#define NUM_LEDS = (NUM_COLS * NUM_ROWS) + NUM_MINUTES;
+const int NUM_COLS = 11;
+const int NUM_ROWS = 10;
+const int NUM_MINUTES = 4; // LEDs for fine minute granularity
+const int NUM_LEDS = (NUM_COLS * NUM_ROWS) + NUM_MINUTES;
 
 CRGB leds[NUM_LEDS];
 boolean ledsBuffer[NUM_LEDS];
-
-// The real time clock chip (DS3231)
-RTC_DS3231 RTC;
 
 // Tasks
 const int wait = 10;
@@ -95,7 +64,7 @@ const int w_to[3] =        { 3,  8,  strlen("to") };
 const int w_past[3] =      { 4,  1,  strlen("past") };
 const int w_oclock[3] =    { 9,  5,  strlen("oclock") };
 
-const int NUM_HOURS = 12
+const int NUM_HOURS = 12;
 const int w_hours[NUM_HOURS + 1][3] = {
   { -1,  -1,  -1 }, // filler element so hour matches index position
   { 5,  0,  strlen("one") },
@@ -133,7 +102,6 @@ void loadTasks() {
   tasks[1].function = showTime;
 }
 
-// TO DO: this is only for manual brightness control. delete if not needed
 void serialMenu() {
   if (Serial.available() > 0) {
 
@@ -157,7 +125,7 @@ void serialMenu() {
       } else if (in == 50) {
         Serial.println("You entered [2]");
         Serial.print("  Brightness: ");
-        Serial.println(brightness, DEC);
+        Serial.println(overrideBrightness, DEC);
         printMenu();
       } else if (in == 51) {
         Serial.println("You entered [3]");
@@ -173,22 +141,16 @@ void serialMenu() {
   }
 }
 
-// TODO: sync RTC with wifi every X minutes
-DateTime getTime() {
-  
-  return RTC.now();
-}
-
 // TODO: does overloaded function work with task implementation
 void showTime() {
-  showTime(getTime());
+  showTime(now());
 }
 
-void showTime(DateTime now) {
+void showTime(time_t now) {
   // Get the time
-  int hour = now.hour();
+  int hour = localTimezone.hour(now);
   int hourToDisplay = hour;
-  int minute = now.minute();
+  int minute = localTimezone.minute(now);
   
   // DEBUG
   Serial.print("[DEBUG] ");
@@ -205,7 +167,7 @@ void showTime(DateTime now) {
     displayWord(w_oclock);
   }
   else {
-  	int floorMinute = (minute / 5) * 5
+  	int floorMinute = (minute / 5) * 5;
 
   	switch (floorMinute) {
   		case 0:
@@ -235,7 +197,7 @@ void showTime(DateTime now) {
 		case 55:
   			displayWord(w_five);
   		default:
-  			Serial.print("Invalid floorMinute: ");
+  			Serial.print("[ERROR] Invalid floorMinute: ");
         	Serial.println(floorMinute, DEC);
   	}
  
@@ -260,7 +222,6 @@ void showTime(DateTime now) {
     displayWord(w_minutes[floorMinute]);
   }
 
-  // Update display
   updateDisplayAndClearBuffer();
 }
 
@@ -280,7 +241,7 @@ int convertFrom2DTo1D(int row, int col) {
 }
 
 void updateDisplayAndClearBuffer() {
-  for (int i = 0, i < NUM_LEDS, i++) {
+  for (int i = 0; i < NUM_LEDS; i++) {
     if (ledsBuffer[i] == true) {
       leds[i] = CRGB::White;
     } else {
@@ -288,7 +249,7 @@ void updateDisplayAndClearBuffer() {
     }
 
     // reset buffer
-    ledBuffer[i] = false;
+    ledsBuffer[i] = false;
   }
 
   setBrightness();
@@ -298,17 +259,17 @@ void updateDisplayAndClearBuffer() {
 void setBrightness() {
   int lightValue = analogRead(pinLDR);
   Serial.print("LDR value is: ");
-  Serial.println(lightValue);
+  Serial.println(lightValue, DEC);
 
   int brightness = lightValueToBrightness(lightValue);
   Serial.print("Calculated brightness value is: ");
-  Serial.println(brightness);
+  Serial.println(brightness, DEC);
   
   if (overrideBrightness >= 0 && overrideBrightness <= 255)
   {
     brightness = overrideBrightness;
     Serial.print("Overriding brightness with: ");
-    Serial.println(brightness);
+    Serial.println(brightness, DEC);
   }
   
   FastLED.setBrightness(brightness);
@@ -323,16 +284,13 @@ int lightValueToBrightness(int lightValue) {
 // iterate through all possible times
 // total duration = 144s with 200ms delay
 void simulateClock() {
-  DateTime simulatedTime = getTime();
-  uint32_t simulatedUnixTime = time.unixtime();
+  time_t simulatedTime = 0;
 
-  for (int i = 0; i < (12 * 60); i++)
-  {
-    simulatedTime = DateTime(simulatedUnixTime);
+  for (int i = 0; i < (12 * 60); i++) {
     showTime(simulatedTime);
 
     // 60*12/5 = 144 steps. 1s per step = .2s delay
-    simulatedUnixTime += 60; // increment 1 minute
+    simulatedTime += 60; // increment 1 minute
     delay(200);
   }
 }
@@ -341,36 +299,43 @@ void printMenu() {
   Serial.println("");
   Serial.println("Menu");
   Serial.println("----");
-  Serial.println("  1. Set brightness");
-  Serial.println("  2. Read brightness");
+  Serial.println("  1. Set brightness override");
+  Serial.println("  2. Read brightness override");
   Serial.println("  3. Simulate for testing");
   Serial.println("");
 }
 
 void setup() {
-  
   Serial.begin(9600);
   Serial.println("[INFO] Wordclock is booting...");
+
+  Serial.println("[INFO] OTA");
+  setupOTA("wordclock", mySSID, myPASSWORD);
   
-  // Initiate the LED drivers
+  Serial.println("[INFO] LED");
   FastLED.addLeds<WS2812, pinLED, GRB>(leds, NUM_LEDS);
 
-  // Initiate the Real Time Clock
-  Serial.println("[INFO] 2. Real time clock");
-  //Wire.begin();
-  
-  if (!RTC.begin()) {
-    Serial.println("[ERROR] Couldn't find RTC!");
+  Serial.println("[INFO] Wifi");
+  Serial.printf("Connecting to %s ", mySSID);
+  WiFi.begin(mySSID, myPASSWORD);
+  while (WiFi.status() != WL_CONNECTED) {
+      delay(500);
+      Serial.print(".");
   }
-  if (RTC.lostPower()) {
-    RTC.adjust(DateTime(F(__DATE__), F(__TIME__)));
-  }
+  Serial.println(" CONNECTED");
+
+  Serial.println("[INFO] Time");
+  waitForSync();
+  Serial.println("  UTC: " + UTC.dateTime());
+	localTimezone.setLocation(localTimezoneLocation);
+  localTimezone.setDefault();
+	Serial.println("  Local time: " + localTimezone.dateTime());
+  setInterval(60 * 10); // sync every 10 minutes
   
-  // Tasks
-  Serial.println("[INFO] 3. Tasks");
+  Serial.println("[INFO] Tasks");
   loadTasks();
   
-  Serial.println("[INFO] 4. Wordclock done booting. Hello World!");
+  Serial.println("[INFO] Wordclock done booting. Hello World!");
   printMenu();
 }
 
@@ -383,5 +348,9 @@ void loop() {
       task.function();
     }
   }  
+
+  // ezTime updates
+  events();
+
   delay(wait);
 }
