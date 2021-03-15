@@ -1,14 +1,7 @@
 // Wordclock firmware
 
-/* Hardware block diagram:
-
-
-
-(created using http://asciiflow.com/) */
-
 #define ESP32_RTOS // for ota capability
 
-// Includes
 #include <FastLED.h>
 #include <WiFi.h>
 #include <ezTime.h>
@@ -16,12 +9,10 @@
 #include "OTA.h"
 
 // TODO: correct pin numbers
-// Pins to led drivers
 const int pinLED = 14; // A0 (used as digital pin)
 const int pinClock = 16; // A2 (used as digital pin)
-
-// Other pins (light sensor)
 const int pinLDR = 3; // A3 (used as analog pin)
+const int pinPIR = 27;
 
 // NTP clock server
 Timezone localTimezone;
@@ -46,9 +37,14 @@ typedef struct Tasks {
 } Task;
 Task tasks[noTasks];
 
-// Serial menu options
-boolean readOverrideBrightness = false;
-int overrideBrightness = -1;
+// Brightness and motion
+boolean readManualOverrideBrightness = false;
+int manualOverrideBrightness = -1;
+
+const boolean enableMotionSensor = true;
+const int noMotionThresholdMs = 30 * 60 * 1000; // 30 minutes
+unsigned long lastMotionDetectedMs;
+boolean logLedSleep = true;
 
 // Words
 // Format: { line index, start position index, length }
@@ -105,27 +101,27 @@ void loadTasks() {
 void serialMenu() {
   if (Serial.available() > 0) {
 
-    if (readOverrideBrightness) {
+    if (readManualOverrideBrightness) {
       int val = Serial.parseInt();
       if (val < 0 || val > 255) {
         Serial.println("[ERROR] Brightness must be between 0 and 255");
       } else {
         Serial.print("Brightness set to ");
         Serial.println(val, DEC);
-        overrideBrightness = val;
+        manualOverrideBrightness = val;
       }
-      readOverrideBrightness = false;
+      readManualOverrideBrightness = false;
       printMenu();
     } else {
       int in = Serial.read(); // TODO: can we just use #parseInt here?
       if (in == 49) { // ascii 1 = byte 49
         Serial.println("You entered [1]");
         Serial.println("  Enter brightness (0-255):");
-        readOverrideBrightness = true;
+        readManualOverrideBrightness = true;
       } else if (in == 50) {
         Serial.println("You entered [2]");
         Serial.print("  Brightness: ");
-        Serial.println(overrideBrightness, DEC);
+        Serial.println(manualOverrideBrightness, DEC);
         printMenu();
       } else if (in == 51) {
         Serial.println("You entered [3]");
@@ -265,9 +261,18 @@ void setBrightness() {
   Serial.print("Calculated brightness value is: ");
   Serial.println(brightness, DEC);
   
-  if (overrideBrightness >= 0 && overrideBrightness <= 255)
-  {
-    brightness = overrideBrightness;
+  if (millis() - lastMotionDetectedMs > noMotionThresholdMs) {
+    if (logLedSleep) {
+      Serial.println("Motion detected");
+      logLedSleep = false;
+    }
+    brightness = 0;
+  } else {
+    logLedSleep = true;
+  }
+  
+  if (manualOverrideBrightness >= 0 && manualOverrideBrightness <= 255) {
+    brightness = manualOverrideBrightness;
     Serial.print("Overriding brightness with: ");
     Serial.println(brightness, DEC);
   }
@@ -279,6 +284,11 @@ void setBrightness() {
 int lightValueToBrightness(int lightValue) {
   int brightness = lightValue;
   return 0;
+}
+
+void IRAM_ATTR detectsMovement() {
+  Serial.println("Motion detected");
+  lastMotionDetectedMs = millis();
 }
 
 // iterate through all possible times
@@ -330,10 +340,17 @@ void setup() {
 	localTimezone.setLocation(localTimezoneLocation);
   localTimezone.setDefault();
 	Serial.println("  Local time: " + localTimezone.dateTime());
-  setInterval(60 * 10); // sync every 10 minutes
+  setInterval(60 * 15); // sync every 15 minutes
   
   Serial.println("[INFO] Tasks");
   loadTasks();
+
+  if (enableMotionSensor) {
+    Serial.println("[INFO] Motion sensor");
+    pinMode(pinPIR, INPUT_PULLUP);
+    attachInterrupt(digitalPinToInterrupt(pinPIR), detectsMovement, RISING);
+    lastMotionDetectedMs = millis();
+  }
   
   Serial.println("[INFO] Wordclock done booting. Hello World!");
   printMenu();
