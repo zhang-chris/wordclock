@@ -46,6 +46,8 @@ const int noMotionThresholdMs = 30 * 60 * 1000; // 30 minutes
 unsigned long lastMotionDetectedMs;
 boolean logLedSleep = true;
 
+const boolean displayItIs = true;
+
 // Words
 // Format: { line index, start position index, length }
 
@@ -155,8 +157,10 @@ void showTime(time_t now) {
   Serial.println(minute, DEC);
   
   // "IT IS"
-  displayWord(w_it);
-  displayWord(w_is);
+  if (displayItIs) {
+    displayWord(w_it);
+    displayWord(w_is);
+  }
   
   // Minutes
   if (minute == 0) {
