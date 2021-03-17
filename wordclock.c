@@ -9,9 +9,9 @@
 #include "OTA.h"
 
 // TODO: correct pin numbers
-const int pinLED = 14; // A0 (used as digital pin)
-const int pinClock = 16; // A2 (used as digital pin)
-const int pinLDR = 3; // A3 (used as analog pin)
+const int pinLedData = 23;
+const int pinLedClock = 22;
+const int pinLDR = 4;
 const int pinPIR = 27;
 
 // NTP clock server
@@ -322,8 +322,8 @@ void setup() {
   Serial.println("[INFO] OTA");
   setupOTA("wordclock", mySSID, myPASSWORD);
   
-  Serial.println("[INFO] LED");
-  FastLED.addLeds<WS2812, pinLED, GRB>(leds, NUM_LEDS);
+  Serial.println("[INFO] LEDs");
+  FastLED.addLeds<APA102, pinLedData, pinLedClock, BGR>(leds, NUM_LEDS);
 
   Serial.println("[INFO] Wifi");
   Serial.printf("Connecting to %s ", mySSID);
