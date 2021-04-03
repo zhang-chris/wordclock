@@ -313,16 +313,16 @@ void IRAM_ATTR detectsMovement() {
 }
 
 // iterate through all possible times
-// total duration = 144s with 100ms delay
+// total duration = 144s with 200ms delay
 void simulateClock() {
   time_t simulatedTime = 0;
 
-  for (int i = 0; i < (24 * 60); i++) {
+  for (int i = 0; i < (12 * 60); i++) {
     showTime(simulatedTime);
 
-    // 60*24/5 = 280 steps. 0.5s per step = .1s delay
+    // 60*12/5 = 144 steps. 0.5s per step = .2s delay
     simulatedTime += 60; // increment 1 minute
-    delay(100);
+    delay(200);
   }
 }
 
