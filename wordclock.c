@@ -6,12 +6,12 @@
 #include <WiFi.h>
 #include <ezTime.h>
 #include <credentials.h>
-#include "OTA.h"
+#include "OTATelnetStream.h"
 
 // TODO: correct pin numbers
-const int pinLedData = 23;
-const int pinLedClock = 22;
-const int pinLDR = 4;
+const int pinLedData = 15;
+const int pinLedClock = 32;
+const int pinLDR = 33;
 const int pinPIR = 27;
 
 // NTP clock server
@@ -30,8 +30,8 @@ boolean ledsBuffer[NUM_LEDS];
 // Tasks
 const int wait = 10;
 const int noTasks = 2;
-typedef struct Tasks {
-   long unsigned int previous;
+typedef struct {
+   unsigned long previous;
    int interval;
    void (*function)();
 } Task;
@@ -101,21 +101,25 @@ void loadTasks() {
 }
 
 void serialMenu() {
+  if (Serial.peek() == 10) { // ignore new line
+    Serial.read();
+  }
   if (Serial.available() > 0) {
-
     if (readManualOverrideBrightness) {
-      int val = Serial.parseInt();
-      if (val < 0 || val > 255) {
-        Serial.println("[ERROR] Brightness must be between 0 and 255");
-      } else {
-        Serial.print("Brightness set to ");
-        Serial.println(val, DEC);
-        manualOverrideBrightness = val;
+      if (Serial.available()) {
+        int val = Serial.parseInt();
+        if (val < -1 || val > 255) {
+          Serial.println("[ERROR] Brightness must be between -1 and 255");
+        } else {
+          Serial.print("Brightness set to ");
+          Serial.println(val, DEC);
+          manualOverrideBrightness = val;
+        }
+        readManualOverrideBrightness = false;
+        printMenu();
       }
-      readManualOverrideBrightness = false;
-      printMenu();
     } else {
-      int in = Serial.read(); // TODO: can we just use #parseInt here?
+      int in = Serial.read();
       if (in == 49) { // ascii 1 = byte 49
         Serial.println("You entered [1]");
         Serial.println("  Enter brightness (0-255):");
@@ -127,19 +131,21 @@ void serialMenu() {
         printMenu();
       } else if (in == 51) {
         Serial.println("You entered [3]");
-        Serial.println("  Beginning simulation");
+        Serial.println("  Beginning simulation.");
         
         simulateClock();
         printMenu();
+      } else if (in == 10) {
+
       } else {
-        Serial.println("[ERROR] Whut?");
+        Serial.print("[ERROR] Invalid input: ");
+        Serial.println(in);
         printMenu();
       }
     }
   }
 }
 
-// TODO: does overloaded function work with task implementation
 void showTime() {
   showTime(now());
 }
@@ -172,33 +178,44 @@ void showTime(time_t now) {
   	switch (floorMinute) {
   		case 0:
   			break;
-		case 5:
+		  case 5:
   			displayWord(w_five);
+        break;
   		case 10:
   			displayWord(w_ten);
-		case 15:
+        break;
+		  case 15:
   			displayWord(w_quarter);
+        break;
   		case 20:
   			displayWord(w_twenty);
-		case 25:
+        break;
+		  case 25:
   			displayWord(w_twenty);
   			displayWord(w_five);
+        break;
   		case 30:
   			displayWord(w_half);
-		case 35:
+        break;
+		  case 35:
   			displayWord(w_twenty);
   			displayWord(w_five);
+        break;
   		case 40:
   			displayWord(w_twenty);
-		case 45:
+        break;
+		  case 45:
   			displayWord(w_quarter);
+        break;
   		case 50:
   			displayWord(w_ten);
-		case 55:
+        break;
+		  case 55:
   			displayWord(w_five);
+        break;
   		default:
   			Serial.print("[ERROR] Invalid floorMinute: ");
-        	Serial.println(floorMinute, DEC);
+        Serial.println(floorMinute, DEC);
   	}
  
     if (minute <= 30) {
@@ -296,16 +313,16 @@ void IRAM_ATTR detectsMovement() {
 }
 
 // iterate through all possible times
-// total duration = 144s with 200ms delay
+// total duration = 144s with 100ms delay
 void simulateClock() {
   time_t simulatedTime = 0;
 
-  for (int i = 0; i < (12 * 60); i++) {
+  for (int i = 0; i < (24 * 60); i++) {
     showTime(simulatedTime);
 
-    // 60*12/5 = 144 steps. 1s per step = .2s delay
+    // 60*24/5 = 280 steps. 0.5s per step = .1s delay
     simulatedTime += 60; // increment 1 minute
-    delay(200);
+    delay(100);
   }
 }
 
@@ -321,13 +338,16 @@ void printMenu() {
 
 void setup() {
   Serial.begin(9600);
+  delay(500);
+
   Serial.println("[INFO] Wordclock is booting...");
 
   Serial.println("[INFO] OTA");
   setupOTA("wordclock", mySSID, myPASSWORD);
+  delay(5000);
   
   Serial.println("[INFO] LEDs");
-  FastLED.addLeds<APA102, pinLedData, pinLedClock, BGR>(leds, NUM_LEDS);
+  FastLED.addLeds<SK9822, pinLedData, pinLedClock, BGR>(leds, NUM_LEDS);
 
   Serial.println("[INFO] Wifi");
   Serial.printf("Connecting to %s ", mySSID);
