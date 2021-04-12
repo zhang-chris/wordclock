@@ -29,7 +29,7 @@ boolean ledsBuffer[NUM_LEDS];
 
 // Tasks
 const int wait = 10;
-const int noTasks = 2;
+const int noTasks = 4;
 typedef struct {
    unsigned long previous;
    int interval;
@@ -42,7 +42,8 @@ boolean readManualOverrideBrightness = false;
 int manualOverrideBrightness = -1;
 
 const boolean enableMotionSensor = true;
-const int noMotionThresholdMs = 30 * 60 * 1000; // 30 minutes
+const long noMotionThresholdMs = 60 * 60 * 1000; // 60 minutes
+const long motionInactiveThresholdMs = 30 * 60 * 1000; // 30 minutes 
 unsigned long lastMotionDetectedMs;
 boolean logLedSleep = true;
 
@@ -98,6 +99,16 @@ void loadTasks() {
   tasks[1].previous = 0;
   tasks[1].interval = 1000;
   tasks[1].function = showTime;
+
+  // ezTime updates
+  tasks[2].previous = 0;
+  tasks[2].interval = 1000 * 30;
+  tasks[2].function = events;
+
+  // Toggle motion detector
+  tasks[3].previous = 0;
+  tasks[3].interval = 1000 * 60;
+  tasks[3].function = enableMotionSensorInterrupt;
 }
 
 void serialMenu() {
@@ -147,14 +158,11 @@ void serialMenu() {
 }
 
 void showTime() {
-  showTime(now());
+  showTime(hour(), minute());
 }
 
-void showTime(time_t now) {
-  // Get the time
-  int hour = localTimezone.hour(now);
+void showTime(int hour, int minute) {
   int hourToDisplay = hour;
-  int minute = localTimezone.minute(now);
   
   // DEBUG
   Serial.print("[DEBUG] ");
@@ -282,46 +290,46 @@ void setBrightness() {
   Serial.print("Calculated brightness value is: ");
   Serial.println(brightness, DEC);
   
-  if (millis() - lastMotionDetectedMs > noMotionThresholdMs) {
+  if (enableMotionSensor && (millis() - lastMotionDetectedMs > noMotionThresholdMs)) {
     if (logLedSleep) {
-      Serial.println("Motion detected");
+      Serial.println("Sleeping LEDs.");
       logLedSleep = false;
     }
     brightness = 0;
   } else {
     logLedSleep = true;
   }
-  
-  if (manualOverrideBrightness >= 0 && manualOverrideBrightness <= 255) {
-    brightness = manualOverrideBrightness;
-    Serial.print("Overriding brightness with: ");
-    Serial.println(brightness, DEC);
-  }
-  
+
   FastLED.setBrightness(brightness);
 }
 
 // TODO: empirical testing required to determine proper brightness function
 int lightValueToBrightness(int lightValue) {
   int brightness = lightValue;
-  return 0;
+  return 30;
 }
 
 void IRAM_ATTR detectsMovement() {
   Serial.println("Motion detected");
   lastMotionDetectedMs = millis();
+  detachInterrupt(digitalPinToInterrupt(pinPIR));
+}
+
+void enableMotionSensorInterrupt() {
+  if (enableMotionSensor && (millis() - lastMotionDetectedMs > motionInactiveThresholdMs)) {
+    attachInterrupt(digitalPinToInterrupt(pinPIR), detectsMovement, CHANGE);
+  }
 }
 
 // iterate through all possible times
 // total duration = 144s with 200ms delay
 void simulateClock() {
-  time_t simulatedTime = 0;
-
-  for (int i = 0; i < (12 * 60); i++) {
-    showTime(simulatedTime);
+  for (int i = 0; i < 12; i++) {
+    for (int j = 0; j < 60; j++) {
+      showTime(i, j);
+    }
 
     // 60*12/5 = 144 steps. 0.5s per step = .2s delay
-    simulatedTime += 60; // increment 1 minute
     delay(200);
   }
 }
@@ -369,13 +377,11 @@ void setup() {
   Serial.println("[INFO] Tasks");
   loadTasks();
 
-  if (enableMotionSensor) {
-    Serial.println("[INFO] Motion sensor");
-    pinMode(pinPIR, INPUT_PULLUP);
-    attachInterrupt(digitalPinToInterrupt(pinPIR), detectsMovement, RISING);
-    lastMotionDetectedMs = millis();
-  }
-  
+  Serial.println("[INFO] Motion sensor");
+  pinMode(pinPIR, INPUT_PULLUP);
+  attachInterrupt(digitalPinToInterrupt(pinPIR), detectsMovement, CHANGE);
+  lastMotionDetectedMs = millis();
+
   Serial.println("[INFO] Wordclock done booting. Hello World!");
   printMenu();
 }
@@ -389,9 +395,6 @@ void loop() {
       task.function();
     }
   }  
-
-  // ezTime updates
-  events();
 
   delay(wait);
 }
