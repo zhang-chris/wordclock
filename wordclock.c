@@ -251,10 +251,10 @@ void showTime(int hour, int minute) {
   updateDisplayAndClearBuffer();
 }
 
-void displayWord(const int word[3]){
+void displayWord(int word[3]){
   int row = word[0];
   int col = word[1];
-  int length = word[3];
+  int length = word[2];
 
   for (int i = 0; i < length; i++) {
     int ledNum = convertFrom2DTo1D(row, col + i);
