@@ -23,6 +23,8 @@ const int NUM_COLS = 11;
 const int NUM_ROWS = 10;
 const int NUM_MINUTES = 4; // LEDs for fine minute granularity
 const int NUM_LEDS = (NUM_COLS * NUM_ROWS) + NUM_MINUTES;
+const boolean SNAKE = true; // snake LEDs for slightly cleaner wiring; odd numbered rows are reversed
+const int START_POS = 1;
 
 CRGB leds[NUM_LEDS];
 boolean ledsBuffer[NUM_LEDS];
@@ -51,7 +53,6 @@ const boolean displayItIs = true;
 
 // Words
 // Format: { line index, start position index, length }
-
 const int w_it[3] =        { 0,  0,  strlen("it") };
 const int w_is[3] =        { 0,  3,  strlen("is") };
 const int w_five[3] =      { 2,  7,  strlen("five") };
@@ -262,7 +263,10 @@ void displayWord(const int word[3]){
 }
 
 int convertFrom2DTo1D(int row, int col) {
-  return row * NUM_COLS + col;
+  if (SNAKE && (row % 2 == 1)) {
+    return (row * NUM_COLS) + (NUM_COLS - 1 - col) + START_POS;
+  }
+  return (row * NUM_COLS) + col + START_POS;
 }
 
 void updateDisplayAndClearBuffer() {
