@@ -1,6 +1,7 @@
 // Wordclock firmware
 
 #define ESP32_RTOS // for ota capability
+#define ESP32
 
 #include <FastLED.h>
 #include <WiFi.h>
@@ -8,11 +9,10 @@
 #include <credentials.h>
 #include "OTATelnetStream.h"
 
-// TODO: correct pin numbers
 const int pinLedData = 15;
 const int pinLedClock = 32;
-const int pinLDR = 33;
-const int pinPIR = 27;
+const int pinLight = 33;
+const int pinMotion = 27;
 
 // NTP clock server
 Timezone localTimezone;
@@ -23,8 +23,8 @@ const int NUM_COLS = 11;
 const int NUM_ROWS = 10;
 const int NUM_MINUTES = 4; // LEDs for fine minute granularity
 const int NUM_LEDS = (NUM_COLS * NUM_ROWS) + NUM_MINUTES;
-const boolean SNAKE = true; // snake LEDs for slightly cleaner wiring; odd numbered rows are reversed
-const int START_POS = 1;
+const boolean SNAKE = true; // snake LEDs for cleaner wiring; odd numbered rows are reversed
+const int START_POS = 0;
 
 CRGB leds[NUM_LEDS];
 boolean ledsBuffer[NUM_LEDS];
@@ -44,8 +44,8 @@ boolean readManualOverrideBrightness = false;
 int manualOverrideBrightness = -1;
 
 const boolean enableMotionSensor = true;
-const long noMotionThresholdMs = 60 * 60 * 1000; // 60 minutes
-const long motionInactiveThresholdMs = 30 * 60 * 1000; // 30 minutes 
+boolean lastMotion;
+const long noMotionThresholdMs = 30 * 60 * 1000; // 30 minutes
 unsigned long lastMotionDetectedMs;
 boolean logLedSleep = true;
 
@@ -68,10 +68,10 @@ const int NUM_HOURS = 12;
 const int w_hours[NUM_HOURS + 1][3] = {
   { -1,  -1,  -1 }, // filler element so hour matches index position
   { 5,  0,  strlen("one") },
-  { 6,  8,  strlen("two") },
+  { 6,  4,  strlen("two") },
   { 5,  6,  strlen("three") },
   { 6,  0,  strlen("four") },
-  { 6,  4,  strlen("five") },
+  { 6,  7,  strlen("five") },
   { 5,  3,  strlen("six") },
   { 8,  0,  strlen("seven") },
   { 7,  0,  strlen("eight") },
@@ -81,19 +81,20 @@ const int w_hours[NUM_HOURS + 1][3] = {
   { 8,  5,  strlen("twelve") }
 };
 
+// reverse ordering because of wiring
 const int w_minutes[NUM_MINUTES + 1][3] = {
   { -1,  -1,  -1 }, // filler element so minute matches index position
-  { 10,  0,  1 },
-  { 10,  1,  1 },
+  { 10,  3,  1 },
   { 10,  2,  1 },
-  { 10,  3,  1 }
+  { 10,  0,  1 },
+  { 10,  1,  1 }
 };
 
 void loadTasks() {
   
   // Listen for input on the serial interface
   tasks[0].previous = 0;
-  tasks[0].interval = 100;
+  tasks[0].interval = 100 * 100000; // disable
   tasks[0].function = serialMenu;
   
   // Show time
@@ -108,8 +109,9 @@ void loadTasks() {
 
   // Toggle motion detector
   tasks[3].previous = 0;
-  tasks[3].interval = 1000 * 60;
-  tasks[3].function = enableMotionSensorInterrupt;
+  tasks[3].interval = 1000;
+  tasks[3].function = checkMotion;
+  
 }
 
 void serialMenu() {
@@ -121,10 +123,10 @@ void serialMenu() {
       if (Serial.available()) {
         int val = Serial.parseInt();
         if (val < -1 || val > 255) {
-          Serial.println("[ERROR] Brightness must be between -1 and 255");
+          TelnetStream.println("[ERROR] Brightness must be between -1 and 255");
         } else {
-          Serial.print("Brightness set to ");
-          Serial.println(val, DEC);
+          TelnetStream.print("Brightness set to ");
+          TelnetStream.println(val, DEC);
           manualOverrideBrightness = val;
         }
         readManualOverrideBrightness = false;
@@ -133,25 +135,25 @@ void serialMenu() {
     } else {
       int in = Serial.read();
       if (in == 49) { // ascii 1 = byte 49
-        Serial.println("You entered [1]");
-        Serial.println("  Enter brightness (0-255):");
+        TelnetStream.println("You entered [1]");
+        TelnetStream.println("  Enter brightness (0-255):");
         readManualOverrideBrightness = true;
       } else if (in == 50) {
-        Serial.println("You entered [2]");
-        Serial.print("  Brightness: ");
-        Serial.println(manualOverrideBrightness, DEC);
+        TelnetStream.println("You entered [2]");
+        TelnetStream.print("  Brightness: ");
+        TelnetStream.println(manualOverrideBrightness, DEC);
         printMenu();
       } else if (in == 51) {
-        Serial.println("You entered [3]");
-        Serial.println("  Beginning simulation.");
+        TelnetStream.println("You entered [3]");
+        TelnetStream.println("  Beginning simulation.");
         
         simulateClock();
         printMenu();
       } else if (in == 10) {
 
       } else {
-        Serial.print("[ERROR] Invalid input: ");
-        Serial.println(in);
+        TelnetStream.print("[ERROR] Invalid input: ");
+        TelnetStream.println(in);
         printMenu();
       }
     }
@@ -166,10 +168,10 @@ void showTime(int hour, int minute) {
   int hourToDisplay = hour;
   
   // DEBUG
-  Serial.print("[DEBUG] ");
-  Serial.print(hour, DEC);
-  Serial.print(':');
-  Serial.println(minute, DEC);
+  TelnetStream.print("[DEBUG] ");
+  TelnetStream.print(hour, DEC);
+  TelnetStream.print(':');
+  TelnetStream.println(minute, DEC);
   
   // "IT IS"
   if (displayItIs) {
@@ -178,10 +180,9 @@ void showTime(int hour, int minute) {
   }
   
   // Minutes
-  if (minute == 0) {
+  if (minute >= 0 && minute <= 4) {
     displayWord(w_oclock);
-  }
-  else {
+  } else {
   	int floorMinute = (minute / 5) * 5;
 
   	switch (floorMinute) {
@@ -223,11 +224,11 @@ void showTime(int hour, int minute) {
   			displayWord(w_five);
         break;
   		default:
-  			Serial.print("[ERROR] Invalid floorMinute: ");
-        Serial.println(floorMinute, DEC);
+  			TelnetStream.print("[ERROR] Invalid floorMinute: ");
+        TelnetStream.println(floorMinute, DEC);
   	}
  
-    if (minute <= 30) {
+    if (minute <= 34) {
       displayWord(w_past);
     } else {
       displayWord(w_to);
@@ -236,22 +237,25 @@ void showTime(int hour, int minute) {
   } 
   
   // Hours
-  if (hourToDisplay < 12) {
-    displayWord(w_hours[hourToDisplay]);
-  } else {
-    displayWord(w_hours[hourToDisplay - 12]);
+  if (hourToDisplay == 0) {
+    hourToDisplay = 12;
+  } else if (hourToDisplay > 12) {
+    hourToDisplay -= 12;
   }
+  displayWord(w_hours[hourToDisplay]);
 
   // Fine minute granularity
-  int floorMinute = minute % 5;
-  if (floorMinute > 0) {
-    displayWord(w_minutes[floorMinute]);
+  int fineMinute = minute % 5;
+  if (fineMinute > 0) {
+    for (int i = 1; i <= fineMinute; i++) {
+      displayWord(w_minutes[i]);
+    }
   }
 
   updateDisplayAndClearBuffer();
 }
 
-void displayWord(int word[3]){
+void displayWord(const int word[3]){
   int row = word[0];
   int col = word[1];
   int length = word[2];
@@ -286,17 +290,17 @@ void updateDisplayAndClearBuffer() {
 }
 
 void setBrightness() {
-  int lightValue = analogRead(pinLDR);
-  Serial.print("LDR value is: ");
-  Serial.println(lightValue, DEC);
+  int lightValue = analogRead(pinLight);
+  TelnetStream.print("LDR value is: ");
+  TelnetStream.println(lightValue, DEC);
 
   int brightness = lightValueToBrightness(lightValue);
-  Serial.print("Calculated brightness value is: ");
-  Serial.println(brightness, DEC);
+  TelnetStream.print("Calculated brightness value is: ");
+  TelnetStream.println(brightness, DEC);
   
   if (enableMotionSensor && (millis() - lastMotionDetectedMs > noMotionThresholdMs)) {
     if (logLedSleep) {
-      Serial.println("Sleeping LEDs.");
+      TelnetStream.println("Sleeping LEDs.");
       logLedSleep = false;
     }
     brightness = 0;
@@ -310,84 +314,79 @@ void setBrightness() {
 // TODO: empirical testing required to determine proper brightness function
 int lightValueToBrightness(int lightValue) {
   int brightness = lightValue;
-  return 30;
+  return 50;
 }
 
-void IRAM_ATTR detectsMovement() {
-  Serial.println("Motion detected");
-  lastMotionDetectedMs = millis();
-  detachInterrupt(digitalPinToInterrupt(pinPIR));
-}
-
-void enableMotionSensorInterrupt() {
-  if (enableMotionSensor && (millis() - lastMotionDetectedMs > motionInactiveThresholdMs)) {
-    attachInterrupt(digitalPinToInterrupt(pinPIR), detectsMovement, CHANGE);
+void checkMotion() {
+  boolean motion = digitalRead(pinMotion);
+  if (motion != lastMotion) {
+    TelnetStream.println("Motion change detected");
+    lastMotion = motion;
+    lastMotionDetectedMs = millis();
   }
 }
 
 // iterate through all possible times
-// total duration = 144s with 200ms delay
 void simulateClock() {
   for (int i = 0; i < 12; i++) {
     for (int j = 0; j < 60; j++) {
       showTime(i, j);
+      delay(500);
     }
-
-    // 60*12/5 = 144 steps. 0.5s per step = .2s delay
-    delay(200);
   }
 }
 
 void printMenu() {
-  Serial.println("");
-  Serial.println("Menu");
-  Serial.println("----");
-  Serial.println("  1. Set brightness override");
-  Serial.println("  2. Read brightness override");
-  Serial.println("  3. Simulate for testing");
-  Serial.println("");
+  TelnetStream.println("");
+  TelnetStream.println("Menu");
+  TelnetStream.println("----");
+  TelnetStream.println("  1. Set brightness override");
+  TelnetStream.println("  2. Read brightness override");
+  TelnetStream.println("  3. Simulate for testing");
+  TelnetStream.println("");
 }
 
 void setup() {
   Serial.begin(9600);
   delay(500);
 
-  Serial.println("[INFO] Wordclock is booting...");
+  TelnetStream.println("[INFO] Wordclock is booting...");
 
-  Serial.println("[INFO] OTA");
+  TelnetStream.println("[INFO] OTA");
   setupOTA("wordclock", mySSID, myPASSWORD);
-  delay(5000);
+  delay(1000);
   
-  Serial.println("[INFO] LEDs");
+  TelnetStream.println("[INFO] LEDs");
   FastLED.addLeds<SK9822, pinLedData, pinLedClock, BGR>(leds, NUM_LEDS);
 
-  Serial.println("[INFO] Wifi");
-  Serial.printf("Connecting to %s ", mySSID);
+  TelnetStream.println("[INFO] Wifi");
+  TelnetStream.printf("Connecting to %s ", mySSID);
   WiFi.begin(mySSID, myPASSWORD);
   while (WiFi.status() != WL_CONNECTED) {
       delay(500);
-      Serial.print(".");
+      TelnetStream.print(".");
   }
-  Serial.println(" CONNECTED");
+  TelnetStream.println(" CONNECTED");
 
-  Serial.println("[INFO] Time");
+  TelnetStream.println("[INFO] Time");
   waitForSync();
-  Serial.println("  UTC: " + UTC.dateTime());
+  TelnetStream.println("  UTC: " + UTC.dateTime());
 	localTimezone.setLocation(localTimezoneLocation);
   localTimezone.setDefault();
-	Serial.println("  Local time: " + localTimezone.dateTime());
+	TelnetStream.println("  Local time: " + localTimezone.dateTime());
   setInterval(60 * 15); // sync every 15 minutes
   
-  Serial.println("[INFO] Tasks");
+  TelnetStream.println("[INFO] Tasks");
   loadTasks();
 
-  Serial.println("[INFO] Motion sensor");
-  pinMode(pinPIR, INPUT_PULLUP);
-  attachInterrupt(digitalPinToInterrupt(pinPIR), detectsMovement, CHANGE);
+  TelnetStream.println("[INFO] Motion sensor");
+  pinMode(pinMotion, INPUT);
   lastMotionDetectedMs = millis();
 
-  Serial.println("[INFO] Wordclock done booting. Hello World!");
+  TelnetStream.println("[INFO] Wordclock done booting. Hello World!");
   printMenu();
+
+  // simulateClock();
 }
 
 void loop() {
