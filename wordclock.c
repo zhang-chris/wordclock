@@ -9,14 +9,14 @@
 #include <credentials.h>
 #include "OTATelnetStream.h"
 
-const int pinLedData = 15;
-const int pinLedClock = 32;
-const int pinLight = 33;
-const int pinMotion = 27;
+const int PIN_LED_DATA = 15;
+const int PIN_LED_CLOCK = 32;
+const int PIN_LIGHT = 33;
+const int PIN_MOTION = 27;
 
 // NTP clock server
 Timezone localTimezone;
-const char* localTimezoneLocation = "America/Los_Angeles";
+const char* LOCAL_TIMEZONE_LOCATION = "America/Los_Angeles";
 
 // Led strips
 const int NUM_COLS = 11;
@@ -27,29 +27,28 @@ const boolean SNAKE = true; // snake LEDs for cleaner wiring; odd numbered rows 
 const int START_POS = 0;
 
 CRGB leds[NUM_LEDS];
-boolean ledsBuffer[NUM_LEDS];
-
-// Tasks
-const int wait = 10;
-const int noTasks = 4;
-typedef struct {
-   unsigned long previous;
-   int interval;
-   void (*function)();
-} Task;
-Task tasks[noTasks];
+boolean leds_buffer[NUM_LEDS];
 
 // Brightness and motion
 boolean readManualOverrideBrightness = false;
 int manualOverrideBrightness = -1;
+const int LIGHT_BUFFER_SIZE = 8;
+int lightBuffer[LIGHT_BUFFER_SIZE];
+int lightBufferIndex = 0;
+const int FADE_STEPS = 20;
+const int MS_IN_S = 1000;
+const int MIN_BRIGHTNESS = 10;
+const int MAX_BRIGHTNESS = 70;
 
-const boolean enableMotionSensor = true;
+const boolean ENABLE_MOTION_SENSOR = true;
 boolean lastMotion;
-const long noMotionThresholdMs = 30 * 60 * 1000; // 30 minutes
+const long NO_MOTION_THRESHOLD_MS = 30 * 60 * 1000; // 30 minutes
+const long NO_MOTION_THRESHOLD_DAY_MS = 30 * 60 * 1000; // 30 minutes
+const long NO_MOTION_THRESHOLD_NIGHT_MS = 30 * 60 * 1000; // 5 minutes
 unsigned long lastMotionDetectedMs;
 boolean logLedSleep = true;
 
-const boolean displayItIs = true;
+const boolean DISPLAY_IT_IS = true;
 
 // Words
 // Format: { line index, start position index, length }
@@ -81,7 +80,7 @@ const int w_hours[NUM_HOURS + 1][3] = {
   { 8,  5,  strlen("twelve") }
 };
 
-// reverse ordering because of wiring
+// special ordering because of wiring
 const int w_minutes[NUM_MINUTES + 1][3] = {
   { -1,  -1,  -1 }, // filler element so minute matches index position
   { 10,  3,  1 },
@@ -89,30 +88,6 @@ const int w_minutes[NUM_MINUTES + 1][3] = {
   { 10,  0,  1 },
   { 10,  1,  1 }
 };
-
-void loadTasks() {
-  
-  // Listen for input on the serial interface
-  tasks[0].previous = 0;
-  tasks[0].interval = 100 * 100000; // disable
-  tasks[0].function = serialMenu;
-  
-  // Show time
-  tasks[1].previous = 0;
-  tasks[1].interval = 1000;
-  tasks[1].function = showTime;
-
-  // ezTime updates
-  tasks[2].previous = 0;
-  tasks[2].interval = 1000 * 30;
-  tasks[2].function = events;
-
-  // Toggle motion detector
-  tasks[3].previous = 0;
-  tasks[3].interval = 1000;
-  tasks[3].function = checkMotion;
-  
-}
 
 void serialMenu() {
   if (Serial.peek() == 10) { // ignore new line
@@ -174,7 +149,7 @@ void showTime(int hour, int minute) {
   TelnetStream.println(minute, DEC);
   
   // "IT IS"
-  if (displayItIs) {
+  if (DISPLAY_IT_IS) {
     displayWord(w_it);
     displayWord(w_is);
   }
@@ -262,7 +237,7 @@ void displayWord(const int word[3]){
 
   for (int i = 0; i < length; i++) {
     int ledNum = convertFrom2DTo1D(row, col + i);
-    ledsBuffer[ledNum] = true;
+    leds_buffer[ledNum] = true;
   }
 }
 
@@ -275,50 +250,108 @@ int convertFrom2DTo1D(int row, int col) {
 
 void updateDisplayAndClearBuffer() {
   for (int i = 0; i < NUM_LEDS; i++) {
-    if (ledsBuffer[i] == true) {
+    if (leds_buffer[i] == true) {
       leds[i] = CRGB::White;
     } else {
       leds[i] = CRGB::Black;
     }
 
     // reset buffer
-    ledsBuffer[i] = false;
+    leds_buffer[i] = false;
   }
 
-  setBrightness();
   FastLED.show();
 }
 
-void setBrightness() {
-  int lightValue = analogRead(pinLight);
-  TelnetStream.print("LDR value is: ");
-  TelnetStream.println(lightValue, DEC);
+void readLight() {
+  int lightValue = analogRead(PIN_LIGHT);
 
-  int brightness = lightValueToBrightness(lightValue);
-  TelnetStream.print("Calculated brightness value is: ");
-  TelnetStream.println(brightness, DEC);
+  lightBuffer[lightBufferIndex] = lightValue;
+  lightBufferIndex = (lightBufferIndex + 1) % LIGHT_BUFFER_SIZE;
+}
+
+void setBrightness() {
+  int brightness = calculateBrightness();
   
-  if (enableMotionSensor && (millis() - lastMotionDetectedMs > noMotionThresholdMs)) {
+  if (ENABLE_MOTION_SENSOR && (millis() - lastMotionDetectedMs > NO_MOTION_THRESHOLD_MS)) {
     if (logLedSleep) {
       TelnetStream.println("Sleeping LEDs.");
       logLedSleep = false;
     }
+    
     brightness = 0;
   } else {
     logLedSleep = true;
   }
 
-  FastLED.setBrightness(brightness);
+
+  smoothToBrightness(brightness);
+}
+
+void smoothToBrightness(int brightness) {
+  int currentBrightness = FastLED.getBrightness();
+
+  if (currentBrightness == brightness) {
+    return;
+  }
+
+  int difference = brightness - currentBrightness;
+  int delta = difference / FADE_STEPS;
+
+  if (delta == 0) {
+    if (difference < 0) {
+      delta = -1;
+    } else {
+      delta = 1;
+    }
+  }
+
+  while (currentBrightness != brightness) {
+    currentBrightness += delta;
+
+    if (currentBrightness < MIN_BRIGHTNESS) {
+      currentBrightness = MIN_BRIGHTNESS;
+    }
+    if (currentBrightness > MAX_BRIGHTNESS) {
+      currentBrightness = MAX_BRIGHTNESS;
+    }
+    
+    FastLED.setBrightness(currentBrightness);
+    FastLED.show();
+
+    if (currentBrightness == MIN_BRIGHTNESS || currentBrightness == MAX_BRIGHTNESS) {
+      break;
+    }
+
+    delay(MS_IN_S / FADE_STEPS);
+  }
 }
 
 // TODO: empirical testing required to determine proper brightness function
-int lightValueToBrightness(int lightValue) {
-  int brightness = lightValue;
-  return 50;
+int calculateBrightness() {
+  
+  double averageLight = getAverageLight();
+  int brightness = constrain(map(averageLight, 0, 3000, MIN_BRIGHTNESS, MAX_BRIGHTNESS), MIN_BRIGHTNESS, MAX_BRIGHTNESS);
+
+  TelnetStream.print("Average LDR: ");
+  TelnetStream.println(averageLight, DEC);
+  TelnetStream.print("Brightness: ");
+  TelnetStream.println(brightness, DEC);
+  TelnetStream.println("");
+
+  return brightness;
+}
+
+double getAverageLight() {
+  double sum = 0;
+  for (int i = 0; i < LIGHT_BUFFER_SIZE; i++) {
+    sum += lightBuffer[i];
+  }
+  return sum / LIGHT_BUFFER_SIZE;
 }
 
 void checkMotion() {
-  boolean motion = digitalRead(pinMotion);
+  boolean motion = digitalRead(PIN_MOTION);
   if (motion != lastMotion) {
     TelnetStream.println("Motion change detected");
     lastMotion = motion;
@@ -357,7 +390,9 @@ void setup() {
   delay(1000);
   
   TelnetStream.println("[INFO] LEDs");
-  FastLED.addLeds<SK9822, pinLedData, pinLedClock, BGR>(leds, NUM_LEDS);
+  FastLED.addLeds<SK9822, PIN_LED_DATA, PIN_LED_CLOCK, BGR>(leds, NUM_LEDS);
+  FastLED.setBrightness(MAX_BRIGHTNESS);
+  set_max_power_in_volts_and_milliamps(5, 500); 
 
   TelnetStream.println("[INFO] Wifi");
   TelnetStream.printf("Connecting to %s ", mySSID);
@@ -371,33 +406,49 @@ void setup() {
   TelnetStream.println("[INFO] Time");
   waitForSync();
   TelnetStream.println("  UTC: " + UTC.dateTime());
-	localTimezone.setLocation(localTimezoneLocation);
+	localTimezone.setLocation(LOCAL_TIMEZONE_LOCATION);
   localTimezone.setDefault();
 	TelnetStream.println("  Local time: " + localTimezone.dateTime());
   setInterval(60 * 15); // sync every 15 minutes
   
-  TelnetStream.println("[INFO] Tasks");
-  loadTasks();
+  // TelnetStream.println("[INFO] Tasks");
+  // loadTasks();
 
   TelnetStream.println("[INFO] Motion sensor");
-  pinMode(pinMotion, INPUT);
+  pinMode(PIN_MOTION, INPUT);
   lastMotionDetectedMs = millis();
 
   TelnetStream.println("[INFO] Wordclock done booting. Hello World!");
   printMenu();
-
-  // simulateClock();
 }
 
 void loop() {
-  unsigned long time = millis();
-  for (int i = 0; i < noTasks; i++) {
-    Task task = tasks[i];
-    if (time - task.previous > task.interval) {
-      tasks[i].previous = time;
-      task.function();
-    }
-  }  
+  // while (true) {
+  //   simulateClock();
+  // }
 
-  delay(wait);
+  // Show time
+  EVERY_N_SECONDS(1) {
+    showTime();
+  }
+
+  // ezTime updates
+  EVERY_N_SECONDS(30) {
+    events();
+  }
+
+  // Toggle motion detector
+  EVERY_N_SECONDS(1) {
+    checkMotion();
+  }
+
+  // Read light sensor
+  EVERY_N_MILLISECONDS(250) {
+    readLight();
+  }
+
+  // Adjust brightness
+  EVERY_N_SECONDS(2) {
+    setBrightness();
+  }
 }

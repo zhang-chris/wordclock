@@ -71,7 +71,7 @@ const int pinClock = 16; // A2 (used as digital pin)
 
 // Other pins (buzzer and light sensor)
 const int pinBuzzer = 2;
-const int pinLDR = 3; // A3 (used as analog pin)
+const int pinLight = 3; // A3 (used as analog pin)
 
 // Led strips
 #define NUM_LEDS = 196;
