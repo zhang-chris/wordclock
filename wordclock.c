@@ -39,12 +39,12 @@ const int FADE_STEPS = 20;
 const int MS_IN_S = 1000;
 const int MIN_BRIGHTNESS = 10;
 const int MAX_BRIGHTNESS = 70;
+const boolean LOG_BRIGHTNESS = false;
 
 const boolean ENABLE_MOTION_SENSOR = true;
 boolean lastMotion;
-const long NO_MOTION_THRESHOLD_MS = 30 * 60 * 1000; // 30 minutes
 const long NO_MOTION_THRESHOLD_DAY_MS = 30 * 60 * 1000; // 30 minutes
-const long NO_MOTION_THRESHOLD_NIGHT_MS = 30 * 60 * 1000; // 5 minutes
+const long NO_MOTION_THRESHOLD_NIGHT_MS = 5 * 60 * 1000; // 5 minutes
 unsigned long lastMotionDetectedMs;
 boolean logLedSleep = true;
 
@@ -273,7 +273,9 @@ void readLight() {
 void setBrightness() {
   int brightness = calculateBrightness();
   
-  if (ENABLE_MOTION_SENSOR && (millis() - lastMotionDetectedMs > NO_MOTION_THRESHOLD_MS)) {
+  long noMotionThreshold = (hour() <= 8) ? NO_MOTION_THRESHOLD_NIGHT_MS : NO_MOTION_THRESHOLD_DAY_MS;
+
+  if (ENABLE_MOTION_SENSOR && (millis() - lastMotionDetectedMs > noMotionThreshold)) {
     if (logLedSleep) {
       TelnetStream.println("Sleeping LEDs.");
       logLedSleep = false;
@@ -299,11 +301,7 @@ void smoothToBrightness(int brightness) {
   int delta = difference / FADE_STEPS;
 
   if (delta == 0) {
-    if (difference < 0) {
-      delta = -1;
-    } else {
-      delta = 1;
-    }
+    delta = (difference < 0) ? -1 : 1;
   }
 
   while (currentBrightness != brightness) {
@@ -333,11 +331,13 @@ int calculateBrightness() {
   double averageLight = getAverageLight();
   int brightness = constrain(map(averageLight, 0, 3000, MIN_BRIGHTNESS, MAX_BRIGHTNESS), MIN_BRIGHTNESS, MAX_BRIGHTNESS);
 
-  TelnetStream.print("Average LDR: ");
-  TelnetStream.println(averageLight, DEC);
-  TelnetStream.print("Brightness: ");
-  TelnetStream.println(brightness, DEC);
-  TelnetStream.println("");
+  if (LOG_BRIGHTNESS) {
+    TelnetStream.print("Average LDR: ");
+    TelnetStream.println(averageLight, DEC);
+    TelnetStream.print("Brightness: ");
+    TelnetStream.println(brightness, DEC);
+    TelnetStream.println("");
+  }
 
   return brightness;
 }
