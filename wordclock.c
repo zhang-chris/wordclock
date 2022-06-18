@@ -16,7 +16,7 @@ const int PIN_MOTION = 27;
 
 // NTP clock server
 Timezone localTimezone;
-const char* LOCAL_TIMEZONE_LOCATION = "America/Los_Angeles";
+const char* LOCAL_TIMEZONE_LOCATION = "America/New_York";
 
 // Led strips
 const int NUM_COLS = 11;
@@ -37,18 +37,18 @@ int lightBuffer[LIGHT_BUFFER_SIZE];
 int lightBufferIndex = 0;
 const int FADE_STEPS = 20;
 const int MS_IN_S = 1000;
-const int MIN_BRIGHTNESS = 10;
+const int MIN_BRIGHTNESS = 5;
 const int MAX_BRIGHTNESS = 70;
 const boolean LOG_BRIGHTNESS = false;
 
 const boolean ENABLE_MOTION_SENSOR = true;
 boolean lastMotion;
-const long NO_MOTION_THRESHOLD_DAY_MS = 30 * 60 * 1000; // 30 minutes
-const long NO_MOTION_THRESHOLD_NIGHT_MS = 5 * 60 * 1000; // 5 minutes
+const long NO_MOTION_THRESHOLD_DAY_MS = 15 * 60 * 1000; // 5 minutes
+const long NO_MOTION_THRESHOLD_NIGHT_MS = 5 * 60 * 1000; // 2 minutes
 unsigned long lastMotionDetectedMs;
 boolean logLedSleep = true;
 
-const boolean DISPLAY_IT_IS = true;
+const boolean DISPLAY_IT_IS = false;
 
 // Words
 // Format: { line index, start position index, length }
@@ -297,6 +297,17 @@ void smoothToBrightness(int brightness) {
     return;
   }
 
+  if (currentBrightness == 0) {
+  	FastLED.setBrightness(brightness);
+    FastLED.show();
+    return;
+  }
+
+  if (brightness == 0) {
+  	smoothToZero();
+  	return;
+  }
+
   int difference = brightness - currentBrightness;
   int delta = difference / FADE_STEPS;
 
@@ -325,7 +336,28 @@ void smoothToBrightness(int brightness) {
   }
 }
 
-// TODO: empirical testing required to determine proper brightness function
+void smoothToZero() {
+  int currentBrightness = FastLED.getBrightness();
+  int delta = currentBrightness / FADE_STEPS;
+
+  if (delta == 0) {
+    delta = 1;
+  }
+
+  while (currentBrightness != 0) {
+    currentBrightness -= delta;
+
+    if (currentBrightness < 0) {
+      currentBrightness = 0;
+    }
+
+    FastLED.setBrightness(currentBrightness);
+    FastLED.show();
+
+    delay(MS_IN_S / FADE_STEPS);
+  }
+}
+
 int calculateBrightness() {
   
   double averageLight = getAverageLight();
