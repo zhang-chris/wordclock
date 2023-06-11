@@ -37,7 +37,7 @@ int lightBuffer[LIGHT_BUFFER_SIZE];
 int lightBufferIndex = 0;
 const int FADE_STEPS = 20;
 const int MS_IN_S = 1000;
-const int MIN_BRIGHTNESS = 5;
+const int MIN_BRIGHTNESS = 1;
 const int MAX_BRIGHTNESS = 70;
 const boolean LOG_BRIGHTNESS = false;
 
@@ -82,12 +82,14 @@ const int w_hours[NUM_HOURS + 1][3] = {
 
 // special ordering because of wiring
 const int w_minutes[NUM_MINUTES + 1][3] = {
-  { -1,  -1,  -1 }, // filler element so minute matches index position
+//  { -1,  -1,  -1 }, // filler element so minute matches index position
   { 10,  3,  1 },
   { 10,  2,  1 },
-  { 10,  0,  1 },
-  { 10,  1,  1 }
+  { 10,  1,  1 },
+  { 10,  0,  1 }
 };
+// used to fairly distribute led usage when displaying minute granularity
+int minuteIndex = 1;
 
 void serialMenu() {
   if (Serial.peek() == 10) { // ignore new line
@@ -221,9 +223,12 @@ void showTime(int hour, int minute) {
 
   // Fine minute granularity
   int fineMinute = minute % 5;
+  if (fineMinute == 0) {
+    minuteIndex = (minuteIndex + 1) % 5;
+  }
   if (fineMinute > 0) {
-    for (int i = 1; i <= fineMinute; i++) {
-      displayWord(w_minutes[i]);
+    for (int i = 0; i < fineMinute; i++) {
+      displayWord(w_minutes[(minuteIndex + i) % 5]);
     }
   }
 
